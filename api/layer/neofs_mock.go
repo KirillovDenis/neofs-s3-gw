@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	objectv2 "github.com/nspcc-dev/neofs-api-go/v2/object"
@@ -29,6 +30,7 @@ type TestNeoFS struct {
 
 	objects      map[string]*object.Object
 	containers   map[string]*container.Container
+	muEacl       sync.RWMutex
 	eaclTables   map[string]*eacl.Table
 	currentEpoch uint64
 }
@@ -268,12 +270,29 @@ func (t *TestNeoFS) SetContainerEACL(_ context.Context, table eacl.Table, _ *ses
 		return errors.New("not found")
 	}
 
+	t.muEacl.Lock()
 	t.eaclTables[cnrID.EncodeToString()] = &table
+	t.muEacl.Unlock()
+
+	// emulate polling eacl on real network to make sure it's applied
+	// also it's need to reproduce neofs-s3-gw#685
+	time.Sleep(500 * time.Millisecond)
+
+	resTable, err := t.ContainerEACL(context.Background(), cnrID)
+	if err != nil {
+		return err
+	}
+
+	if !eacl.EqualTables(table, *resTable) {
+		return fmt.Errorf("failed to update eacl table for cnr '%s'", cnrID.EncodeToString())
+	}
 
 	return nil
 }
 
 func (t *TestNeoFS) ContainerEACL(_ context.Context, cnrID cid.ID) (*eacl.Table, error) {
+	t.muEacl.RLock()
+	defer t.muEacl.RUnlock()
 	table, ok := t.eaclTables[cnrID.EncodeToString()]
 	if !ok {
 		return nil, errors.New("not found")

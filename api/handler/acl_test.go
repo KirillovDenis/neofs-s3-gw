@@ -1352,6 +1352,35 @@ func TestBucketPolicy(t *testing.T) {
 	}
 }
 
+func TestConcurrentACLUpdate(t *testing.T) {
+	hc := prepareHandlerContext(t)
+
+	bktName := "bucket-for-concurrent-acl"
+	box, _ := createAccessBox(t)
+	createBucket(t, hc, bktName, box)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			putObjectWithACL(hc, bktName, "obj"+strconv.Itoa(i), basicACLReadOnly, box)
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func putObjectWithACL(hc *handlerContext, bktName, objName, cannedACL string, box *accessbox.Box) {
+	body := bytes.NewReader([]byte("content"))
+	w, r := prepareTestPayloadRequest(hc, bktName, objName, body)
+	r.Header.Set(api.AmzACL, cannedACL)
+	ctx := context.WithValue(r.Context(), api.BoxData, box)
+	r = r.WithContext(ctx)
+	hc.Handler().PutObjectHandler(w, r)
+	assertStatus(hc.t, w, http.StatusOK)
+}
+
 func getBucketPolicy(hc *handlerContext, bktName string) *bucketPolicy {
 	w, r := prepareTestRequest(hc, bktName, "", nil)
 	hc.Handler().GetBucketPolicyHandler(w, r)
