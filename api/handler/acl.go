@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
 	v2acl "github.com/nspcc-dev/neofs-api-go/v2/acl"
 	"github.com/nspcc-dev/neofs-s3-gw/api"
@@ -105,6 +106,7 @@ type ast struct {
 
 type astResource struct {
 	resourceInfo
+	ChunkIDs   []uuid.UUID
 	Operations []*astOperation
 }
 
@@ -604,24 +606,32 @@ func addPredefinedACP(acp *AccessControlPolicy, cannedACL string) (*AccessContro
 	return acp, nil
 }
 
-func tableToAst(table *eacl.Table, bktName string) *ast {
+func tableToAst(table *layer.EaclChunkTable, bktName string) *ast {
 	resourceMap := make(map[string]orderedAstResource)
 
-	var groupRecordsLeft int
-	var currentResource orderedAstResource
-	for i, record := range table.Records() {
-		if serviceRec := tryServiceRecord(record); serviceRec != nil {
-			resInfo := resourceInfoFromName(serviceRec.Resource, bktName)
-			groupRecordsLeft = serviceRec.GroupRecordsLength
+	for i, chunk := range table.Chunks {
+		if len(chunk.Records) == 0 {
+			continue
+		}
 
-			currentResource = getResourceOrCreate(resourceMap, i, resInfo)
-			resourceMap[resInfo.Name()] = currentResource
-		} else if groupRecordsLeft != 0 {
-			groupRecordsLeft--
-			addOperationsAndUpdateMap(currentResource, record, resourceMap)
-		} else {
-			resInfo := resInfoFromFilters(bktName, record.Filters())
-			resource := getResourceOrCreate(resourceMap, i, resInfo)
+		serviceRec := tryServiceRecord(chunk.Records[0])
+		if serviceRec != nil {
+			resInfo := resourceInfoFromName(serviceRec.Resource, bktName)
+			if serviceRec.GroupRecordsLength != len(chunk.Records)-1 {
+				// todo add warning or drop group records length at all because we have eacl chunk now
+			}
+
+			resource := getResourceOrCreate(resourceMap, i, resInfo, chunk.ID)
+			resourceMap[resInfo.Name()] = resource
+
+			for _, record := range chunk.Records[1:] {
+				addOperationsAndUpdateMap(resource, record, resourceMap)
+			}
+			continue
+		}
+
+		resource := getResourceOrCreate(resourceMap, i, resourceInfo{}, chunk.ID)
+		for _, record := range chunk.Records {
 			addOperationsAndUpdateMap(resource, record, resourceMap)
 		}
 	}
@@ -660,7 +670,7 @@ func addOperationsAndUpdateMap(orderedRes orderedAstResource, record eacl.Record
 	resMap[orderedRes.Resource.Name()] = orderedRes
 }
 
-func getResourceOrCreate(resMap map[string]orderedAstResource, index int, resInfo resourceInfo) orderedAstResource {
+func getResourceOrCreate(resMap map[string]orderedAstResource, index int, resInfo resourceInfo, chunkID uuid.UUID) orderedAstResource {
 	resource, ok := resMap[resInfo.Name()]
 	if !ok {
 		resource = orderedAstResource{
@@ -1409,13 +1419,13 @@ func contains(list []eacl.Operation, op eacl.Operation) bool {
 
 type getRecordFunc func(op eacl.Operation) *eacl.Record
 
-func bucketACLToTable(acp *AccessControlPolicy, resInfo *resourceInfo) (*eacl.Table, error) {
+func bucketACLToTable(acp *AccessControlPolicy, resInfo *resourceInfo) (*layer.EaclChunkTable, error) {
 	if !resInfo.IsBucket() {
 		return nil, fmt.Errorf("allowed only bucket acl")
 	}
 
 	var found bool
-	table := eacl.NewTable()
+	var chunkTable layer.EaclChunkTable
 
 	ownerKey, err := keys.NewPublicKeyFromString(acp.Owner.ID)
 	if err != nil {
@@ -1434,22 +1444,29 @@ func bucketACLToTable(acp *AccessControlPolicy, resInfo *resourceInfo) (*eacl.Ta
 		if err != nil {
 			return nil, fmt.Errorf("record func from grantee: %w", err)
 		}
+
+		chunk := layer.EaclChunk{ID: uuid.New()}
 		for _, op := range permissionToOperations(grant.Permission) {
-			table.AddRecord(getRecord(op))
+			chunk.Records = append(chunk.Records, *getRecord(op))
 		}
+		chunkTable.Chunks = append(chunkTable.Chunks, chunk)
 	}
 
 	if !found {
+		chunk := layer.EaclChunk{ID: uuid.New()}
 		for _, op := range fullOps {
-			table.AddRecord(getAllowRecord(op, ownerKey))
+			chunk.Records = append(chunk.Records, *getAllowRecord(op, ownerKey))
 		}
+		chunkTable.Chunks = append(chunkTable.Chunks, chunk)
 	}
 
+	chunk := layer.EaclChunk{ID: uuid.New()}
 	for _, op := range fullOps {
-		table.AddRecord(getOthersRecord(op, eacl.ActionDeny))
+		chunk.Records = append(chunk.Records, *getOthersRecord(op, eacl.ActionDeny))
 	}
+	chunkTable.Chunks = append(chunkTable.Chunks, chunk)
 
-	return table, nil
+	return &chunkTable, nil
 }
 
 func getRecordFunction(grantee *Grantee) (getRecordFunc, error) {

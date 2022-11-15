@@ -20,7 +20,6 @@ import (
 	"github.com/nspcc-dev/neofs-s3-gw/creds/accessbox"
 	"github.com/nspcc-dev/neofs-sdk-go/bearer"
 	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
-	"github.com/nspcc-dev/neofs-sdk-go/eacl"
 	"github.com/nspcc-dev/neofs-sdk-go/netmap"
 	oid "github.com/nspcc-dev/neofs-sdk-go/object/id"
 	"github.com/nspcc-dev/neofs-sdk-go/session"
@@ -145,7 +144,7 @@ type (
 	CreateBucketParams struct {
 		Name                     string
 		Policy                   netmap.PlacementPolicy
-		EACL                     *eacl.Table
+		EACLChunkTable           *EaclChunkTable
 		SessionContainerCreation *session.Container
 		SessionEACL              *session.Container
 		LocationConstraint       string
@@ -154,7 +153,7 @@ type (
 	// PutBucketACLParams stores put bucket acl request parameters.
 	PutBucketACLParams struct {
 		BktInfo      *data.BucketInfo
-		EACL         *eacl.Table
+		EACL         *EaclChunkTable
 		SessionToken *session.Container
 	}
 	// DeleteBucketParams stores delete bucket request parameters.
@@ -360,20 +359,24 @@ func (n *layer) GetBucketInfo(ctx context.Context, name string) (*data.BucketInf
 
 // GetBucketACL returns bucket acl info by name.
 func (n *layer) GetBucketACL(ctx context.Context, bktInfo *data.BucketInfo) (*BucketACL, error) {
-	eACL, err := n.GetContainerEACL(ctx, bktInfo.CID)
+	eACLChunks, err := n.neoFS.GetEACLChunks(ctx, bktInfo.CID)
 	if err != nil {
 		return nil, fmt.Errorf("get container eacl: %w", err)
 	}
 
+	var chunkTable EaclChunkTable
+	chunkTable.Chunks = eACLChunks
+	chunkTable.CID = bktInfo.CID
+
 	return &BucketACL{
 		Info: bktInfo,
-		EACL: eACL,
+		EACL: &chunkTable,
 	}, nil
 }
 
 // PutBucketACL puts bucket acl by name.
 func (n *layer) PutBucketACL(ctx context.Context, param *PutBucketACLParams) error {
-	return n.setContainerEACLTable(ctx, param.BktInfo.CID, param.EACL, param.SessionToken)
+
 }
 
 // ListBuckets returns all user containers. The name of the bucket is a container

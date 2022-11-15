@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	objectv2 "github.com/nspcc-dev/neofs-api-go/v2/object"
 	"github.com/nspcc-dev/neofs-s3-gw/api/layer"
 	"github.com/nspcc-dev/neofs-s3-gw/authmate"
@@ -185,6 +186,26 @@ func (x *NeoFS) SetContainerEACL(ctx context.Context, table eacl.Table, sessionT
 	}
 
 	return err
+}
+
+func (x *NeoFS) EACLChunkPushFront(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID, chunk []eacl.Record) error {
+	panic("implement me")
+}
+
+func (x *NeoFS) EACLChunkPushBack(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID, chunk []eacl.Record) error {
+	panic("implement me")
+}
+
+func (x *NeoFS) EACLChunkPushBetween(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID, chunk []eacl.Record, chunkID1, chunkID2 uuid.UUID) error {
+	panic("implement me")
+}
+
+func (x *NeoFS) RemoveEACLChunk(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID) error {
+	panic("implement me")
+}
+
+func (x *NeoFS) GetEACLChunks(ctx context.Context, cnrID cid.ID) ([]layer.EaclChunk, error) {
+	panic("implement me")
 }
 
 // ContainerEACL implements neofs.NeoFS interface method.

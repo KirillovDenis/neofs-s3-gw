@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	objectv2 "github.com/nspcc-dev/neofs-api-go/v2/object"
 	"github.com/nspcc-dev/neofs-s3-gw/api"
 	"github.com/nspcc-dev/neofs-s3-gw/creds/accessbox"
@@ -31,7 +32,7 @@ type TestNeoFS struct {
 	objects      map[string]*object.Object
 	containers   map[string]*container.Container
 	muEacl       sync.RWMutex
-	eaclTables   map[string]*eacl.Table
+	eaclTables   map[string][]EaclChunk
 	currentEpoch uint64
 }
 
@@ -39,7 +40,7 @@ func NewTestNeoFS() *TestNeoFS {
 	return &TestNeoFS{
 		objects:    make(map[string]*object.Object),
 		containers: make(map[string]*container.Container),
-		eaclTables: make(map[string]*eacl.Table),
+		eaclTables: make(map[string][]EaclChunk),
 	}
 }
 
@@ -261,44 +262,200 @@ func (t *TestNeoFS) AllObjects(cnrID cid.ID) []oid.ID {
 }
 
 func (t *TestNeoFS) SetContainerEACL(_ context.Context, table eacl.Table, _ *session.Container) error {
-	cnrID, ok := table.CID()
-	if !ok {
-		return errors.New("invalid cid")
-	}
+	return errors.New("use chuck methods")
+	//cnrID, ok := table.CID()
+	//if !ok {
+	//	return errors.New("invalid cid")
+	//}
+	//
+	//if _, ok = t.containers[cnrID.EncodeToString()]; !ok {
+	//	return errors.New("not found")
+	//}
+	//
+	//t.muEacl.Lock()
+	//t.eaclTables[cnrID.EncodeToString()] = &table
+	//t.muEacl.Unlock()
+	//
+	//// emulate polling eacl on real network to make sure it's applied
+	//// also it's need to reproduce neofs-s3-gw#685
+	//time.Sleep(500 * time.Millisecond)
+	//
+	//resTable, err := t.ContainerEACL(context.Background(), cnrID)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//if !eacl.EqualTables(table, *resTable) {
+	//	return fmt.Errorf("failed to update eacl table for cnr '%s'", cnrID.EncodeToString())
+	//}
+	//
+	//return nil
+}
 
-	if _, ok = t.containers[cnrID.EncodeToString()]; !ok {
+func (t *TestNeoFS) EACLChunkPushFront(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID, chunk []eacl.Record) error {
+	return t.eACLChunkPush(ctx, cnrID, chunkID, chunk, true)
+}
+
+func (t *TestNeoFS) EACLChunkPushBack(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID, chunk []eacl.Record) error {
+	return t.eACLChunkPush(ctx, cnrID, chunkID, chunk, false)
+}
+
+func (t *TestNeoFS) eACLChunkPush(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID, chunk []eacl.Record, front bool) error {
+	t.muEacl.Lock()
+
+	chunks, ok := t.eaclTables[cnrID.EncodeToString()]
+	if !ok {
 		return errors.New("not found")
 	}
 
-	t.muEacl.Lock()
-	t.eaclTables[cnrID.EncodeToString()] = &table
+	for _, existedChunk := range chunks {
+		if existedChunk.id == chunkID {
+			return fmt.Errorf("such id already in use: %s", chunkID.String())
+		}
+	}
+
+	newChunk := EaclChunk{
+		id:      chunkID,
+		cid:     cnrID,
+		records: chunk,
+	}
+
+	if front {
+		t.eaclTables[cnrID.EncodeToString()] = append([]EaclChunk{newChunk}, chunks...)
+	} else {
+		t.eaclTables[cnrID.EncodeToString()] = append(chunks, newChunk)
+	}
+
 	t.muEacl.Unlock()
 
 	// emulate polling eacl on real network to make sure it's applied
-	// also it's need to reproduce neofs-s3-gw#685
 	time.Sleep(500 * time.Millisecond)
 
-	resTable, err := t.ContainerEACL(context.Background(), cnrID)
+	resChunks, err := t.GetEACLChunks(ctx, cnrID)
 	if err != nil {
 		return err
 	}
 
-	if !eacl.EqualTables(table, *resTable) {
-		return fmt.Errorf("failed to update eacl table for cnr '%s'", cnrID.EncodeToString())
+	for _, resChunk := range resChunks {
+		if resChunk.id == chunkID {
+			return nil
+		}
 	}
 
+	return fmt.Errorf("failed to add chunk: %s", chunkID.String())
+}
+
+func (t *TestNeoFS) EACLChunkPushBetween(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID, chunk []eacl.Record, chunkID1, chunkID2 uuid.UUID) error {
+	t.muEacl.Lock()
+
+	chunks, ok := t.eaclTables[cnrID.EncodeToString()]
+	if !ok {
+		return errors.New("not found")
+	}
+
+	firstIndex, secondIndex := -1, -1
+	for i, existedChunk := range chunks {
+		switch existedChunk.id {
+		case chunkID:
+			return errors.New("chunk already exists")
+		case chunkID1:
+			firstIndex = i
+		case chunkID2:
+			secondIndex = i
+		}
+	}
+
+	if firstIndex == -1 || secondIndex == -1 || secondIndex-firstIndex != 1 {
+		return errors.New("invalid chunkIDs")
+	}
+
+	newChunk := EaclChunk{
+		id:      chunkID,
+		cid:     cnrID,
+		records: chunk,
+	}
+
+	chunks = append(chunks, EaclChunk{})
+	copy(chunks[secondIndex+1:], chunks[secondIndex:])
+	chunks[secondIndex] = newChunk
+
+	t.eaclTables[cnrID.EncodeToString()] = chunks
+
+	t.muEacl.Unlock()
+
+	// emulate polling eacl on real network to make sure it's applied
+	time.Sleep(500 * time.Millisecond)
+
+	resChunks, err := t.GetEACLChunks(ctx, cnrID)
+	if err != nil {
+		return err
+	}
+
+	for _, resChunk := range resChunks {
+		if resChunk.id == chunkID {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("failed to add chunk: %s", chunkID.String())
+}
+
+func (t *TestNeoFS) RemoveEACLChunk(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID) error {
+	t.muEacl.Lock()
+	defer t.muEacl.Unlock()
+
+	chunks, ok := t.eaclTables[cnrID.EncodeToString()]
+	if !ok {
+		return errors.New("not found container")
+	}
+
+	index := -1
+	for i, existedChunk := range chunks {
+		if existedChunk.id == chunkID {
+			index = i
+			break
+		}
+	}
+
+	if index == -1 {
+		return errors.New("not found chunk")
+	}
+
+	chunks = append(chunks[:index], chunks[index+1:]...)
+	t.eaclTables[cnrID.EncodeToString()] = chunks
+
 	return nil
+}
+
+func (t *TestNeoFS) GetEACLChunks(ctx context.Context, cnrID cid.ID) ([]EaclChunk, error) {
+	t.muEacl.RLock()
+	defer t.muEacl.RUnlock()
+
+	chunks, ok := t.eaclTables[cnrID.EncodeToString()]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+
+	return chunks, nil
 }
 
 func (t *TestNeoFS) ContainerEACL(_ context.Context, cnrID cid.ID) (*eacl.Table, error) {
 	t.muEacl.RLock()
 	defer t.muEacl.RUnlock()
-	table, ok := t.eaclTables[cnrID.EncodeToString()]
+
+	chunks, ok := t.eaclTables[cnrID.EncodeToString()]
 	if !ok {
 		return nil, errors.New("not found")
 	}
 
-	return table, nil
+	var table eacl.Table
+	for _, chunk := range chunks {
+		for j := range chunk.Records {
+			table.AddRecord(&chunk.Records[j])
+		}
+	}
+
+	return &table, nil
 }
 
 func getOwner(ctx context.Context) user.ID {

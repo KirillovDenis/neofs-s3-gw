@@ -20,7 +20,7 @@ type (
 	// BucketACL extends BucketInfo by eacl.Table.
 	BucketACL struct {
 		Info *data.BucketInfo
-		EACL *eacl.Table
+		EACL *EaclChunkTable
 	}
 )
 
@@ -146,7 +146,7 @@ func (n *layer) createContainer(ctx context.Context, p *CreateBucketParams) (*da
 
 	bktInfo.CID = idCnr
 
-	if err = n.setContainerEACLTable(ctx, bktInfo.CID, p.EACL, p.SessionEACL); err != nil {
+	if err = n.setContainerEACLChunkTableFull(ctx, bktInfo.CID, p.EACLChunkTable, p.SessionEACL); err != nil {
 		return nil, fmt.Errorf("set container eacl: %w", err)
 	}
 
@@ -155,10 +155,16 @@ func (n *layer) createContainer(ctx context.Context, p *CreateBucketParams) (*da
 	return bktInfo, nil
 }
 
-func (n *layer) setContainerEACLTable(ctx context.Context, idCnr cid.ID, table *eacl.Table, sessionToken *session.Container) error {
-	table.SetCID(idCnr)
+func (n *layer) setContainerEACLChunkTableFull(ctx context.Context, cnrID cid.ID, table *EaclChunkTable, sessionToken *session.Container) error {
+	table.CID = cnrID
 
-	return n.neoFS.SetContainerEACL(ctx, *table, sessionToken)
+	for _, chunk := range table.Chunks {
+		if err := n.neoFS.EACLChunkPushBack(ctx, cnrID, chunk.ID, chunk.Records); err != nil {
+			return fmt.Errorf("chunk push back failed: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (n *layer) GetContainerEACL(ctx context.Context, idCnr cid.ID) (*eacl.Table, error) {

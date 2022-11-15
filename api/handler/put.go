@@ -176,7 +176,7 @@ type createBucketParams struct {
 func (h *handler) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
 	var (
 		err              error
-		newEaclTable     *eacl.Table
+		newEaclTable     *layer.EaclChunkTable
 		sessionTokenEACL *session.Container
 		containsACL      = containsACLHeaders(r)
 		reqInfo          = api.GetReqInfo(r.Context())
@@ -583,7 +583,7 @@ func containsACLHeaders(r *http.Request) bool {
 		r.Header.Get(api.AmzGrantFullControl) != "" || r.Header.Get(api.AmzGrantWrite) != ""
 }
 
-func (h *handler) getNewEAclTable(r *http.Request, bktInfo *data.BucketInfo, objInfo *data.ObjectInfo) (*eacl.Table, error) {
+func (h *handler) getNewEAclTable(r *http.Request, bktInfo *data.BucketInfo, objInfo *data.ObjectInfo) (*layer.EaclChunkTable, error) {
 	var newEaclTable *eacl.Table
 	key, err := h.bearerTokenIssuerKey(r.Context())
 	if err != nil {
@@ -690,7 +690,7 @@ func (h *handler) CreateBucketHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	resInfo := &resourceInfo{Bucket: reqInfo.BucketName}
 
-	p.EACL, err = bucketACLToTable(bktACL, resInfo)
+	p.EACLChunkTable, err = bucketACLToTable(bktACL, resInfo)
 	if err != nil {
 		h.logAndSendError(w, "could translate bucket acl to eacl", reqInfo, err)
 		return

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"

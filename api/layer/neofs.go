@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nspcc-dev/neofs-sdk-go/bearer"
 	"github.com/nspcc-dev/neofs-sdk-go/container"
 	"github.com/nspcc-dev/neofs-sdk-go/container/acl"
@@ -17,6 +18,7 @@ import (
 	oid "github.com/nspcc-dev/neofs-sdk-go/object/id"
 	"github.com/nspcc-dev/neofs-sdk-go/session"
 	"github.com/nspcc-dev/neofs-sdk-go/user"
+	"github.com/nspcc-dev/neofs-sdk-go/version"
 )
 
 // PrmContainerCreate groups parameters of NeoFS.CreateContainer operation.
@@ -128,6 +130,17 @@ type PrmObjectDelete struct {
 	Object oid.ID
 }
 
+type EaclChunk struct {
+	ID      uuid.UUID
+	Records []eacl.Record
+}
+
+type EaclChunkTable struct {
+	Version version.Version
+	CID     cid.ID
+	Chunks  []EaclChunk
+}
+
 // ErrAccessDenied is returned from NeoFS in case of access violation.
 var ErrAccessDenied = errors.New("access denied")
 
@@ -159,7 +172,17 @@ type NeoFS interface {
 	// extended ACL is modified within session if session token is not nil.
 	//
 	// It returns any error encountered which prevented the eACL from being saved.
+	// Deprecated: Use chunk methods instead.
 	SetContainerEACL(context.Context, eacl.Table, *session.Container) error
+
+	// todo add sessionToken *session.Container and use EaclChunk as one arg
+
+	EACLChunkPushFront(ctx context.Context, cnrID cid.ID, chunk EaclChunk) error
+	EACLChunkPushBack(ctx context.Context, cnrID cid.ID, chunk EaclChunk) error
+	EACLChunkPushBetween(ctx context.Context, cnrID cid.ID, chunk EaclChunk, chunkID1, chunkID2 uuid.UUID) error
+	RemoveEACLChunk(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID) error
+	UpdateEACLChunk(ctx context.Context, cnrID cid.ID, chunkID uuid.UUID, records []eacl.Record) error
+	GetEACLChunkTable(ctx context.Context, cnrID cid.ID) (*EaclChunkTable, error)
 
 	// ContainerEACL reads the container eACL from NeoFS by the container ID.
 	//
