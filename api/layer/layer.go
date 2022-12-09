@@ -482,11 +482,21 @@ func (n *layer) GetObjectInfo(ctx context.Context, p *HeadObjectParams) (*data.O
 
 // GetExtendedObjectInfo returns meta information and corresponding info from the tree service about the object.
 func (n *layer) GetExtendedObjectInfo(ctx context.Context, p *HeadObjectParams) (*data.ExtendedObjectInfo, error) {
+	var objInfo *data.ExtendedObjectInfo
+	var err error
+
 	if len(p.VersionID) == 0 {
-		return n.headLastVersionIfNotDeleted(ctx, p.BktInfo, p.Object)
+		objInfo, err = n.headLastVersionIfNotDeleted(ctx, p.BktInfo, p.Object)
+	} else {
+		objInfo, err = n.headVersion(ctx, p.BktInfo, p)
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	return n.headVersion(ctx, p.BktInfo, p)
+	n.log.Debug("get object", zap.String("object", objInfo.ObjectInfo.Name), zap.Stringer("oid", objInfo.ObjectInfo.ID))
+
+	return objInfo, nil
 }
 
 // CopyObject from one bucket into another bucket.
@@ -645,7 +655,13 @@ func (n *layer) CreateBucket(ctx context.Context, p *CreateBucketParams) (*data.
 func (n *layer) ResolveBucket(ctx context.Context, name string) (cid.ID, error) {
 	var cnrID cid.ID
 	if err := cnrID.DecodeString(name); err != nil {
-		return n.resolver.Resolve(ctx, name)
+		if cnrID, err = n.resolver.Resolve(ctx, name); err != nil {
+			return cid.ID{}, err
+		}
+
+		reqInfo := api.GetReqInfo(ctx)
+		n.log.Info("resolved bucket", zap.String("request_id", reqInfo.RequestID),
+			zap.String("bucket", name), zap.Stringer("cid", cnrID))
 	}
 
 	return cnrID, nil
